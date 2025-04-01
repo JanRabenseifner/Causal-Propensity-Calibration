@@ -42,7 +42,7 @@ echo "Current directory: $(pwd)"
 echo "Error log will be saved to: /beegfs/u/*******/sim_propensity_calibration/01_errors_irm/error_report_$SLURM_JOB_ID.log"
 
 # Run the Python script with mpirun and redirect error output to an error log
-mpirun python sim_v06_irm.py 2> /beegfs/u/*******/sim_propensity_calibration/01_errors_irm/error_report_$SLURM_JOB_ID.log
+mpirun python sim_irm.py 2> /beegfs/u/*******/sim_propensity_calibration/01_errors_irm/error_report_$SLURM_JOB_ID.log
 
 # Combine output files after the run
 if [ $SLURM_PROCID -eq 0 ]; then
