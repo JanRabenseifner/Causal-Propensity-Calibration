@@ -62,7 +62,6 @@ def alg_2_nested_cross_fitting_calib(
             calibrated_prop_score[test_idx] = platt_reg_val.predict_proba(covariates[test_idx, :])[:, 1]
 
         elif calib_method == 'ivap':
-            # Pre-fitted Venn-ABERS calibration
             va = VennAbersCalibrator(precision=5)
             calibrated_prop_score[test_idx] = va.predict_proba(p_cal=prop_score_val, y_cal=d_val, p_test=prop_score_test, loss='Brier')[:, 1]
 
@@ -123,18 +122,15 @@ def alg_3_cross_fitted_calib(
     elif calib_method == 'ivap':
         for train_idx, test_idx in smpls:
             train_fit = learner_m.fit(covariates[train_idx, :], treatment[train_idx])
-            # Inner Stratified K-Fold to split the test set
-            kf_calib = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
             
+            kf_calib = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
             for cal_fold_idx, proper_test_idx in kf_calib.split(covariates[test_idx], treatment[test_idx]):
-                cal_idx = test_idx[cal_fold_idx]  # Actual indices for calibration
-                proper_test_idx = test_idx[proper_test_idx]  # Actual indices for proper testing
+                cal_idx = test_idx[cal_fold_idx]  
+                proper_test_idx = test_idx[proper_test_idx]  
 
-                # Propensity scores for the calibration and proper test sets
                 prop_score_cal = train_fit.predict_proba(covariates[cal_idx, :])
                 prop_score_test = train_fit.predict_proba(covariates[proper_test_idx, :])
 
-                # Venn-Abers calibration
                 va = VennAbersCalibrator(precision=5)
                 calibrated_prop_score[proper_test_idx] = va.predict_proba(
                     p_cal=prop_score_cal,
@@ -167,9 +163,7 @@ def alg_4_single_split_calib(
     
     calibrated_prop_score = np.zeros_like(treatment, dtype=float)
     
-    # Loop over each fold
     for train_idx, cal_idx in smpls:
-        # Split the data into training and calibration folds
         X_train, X_cal = covariates[train_idx], covariates[cal_idx]
         d_train, d_cal = treatment[train_idx], treatment[cal_idx]
 
@@ -186,7 +180,6 @@ def alg_4_single_split_calib(
             )
             iso_reg.fit(prop_score_cal[:, 1], d_cal)
 
-            # Calibrate the propensity scores from the train fold using isotonic regression and the calibration fold
             calibrated_prop_score[train_idx] = iso_reg.predict(prop_score_train[:, 1])
 
         elif calib_method == 'platt':
@@ -197,9 +190,6 @@ def alg_4_single_split_calib(
             calibrated_prop_score[cal_idx] = platt_reg_val.predict_proba(X_cal)[:, 1]
 
         elif calib_method == 'ivap':
-            #va = VennAbersCalibrator(estimator=learner_m,inductive=True, precision=5, train_proper_size = 0.5)
-            #va.fit(_x_train=X_train, _y_train=y_train)
-            #calibrated_prop_score[cal_idx] = va.predict_proba(_x_test = X_cal, p0_p1_output=False, loss='Brier')[:, 1]
             va = VennAbersCalibrator(precision=5)
             calibrated_prop_score[train_idx] = va.predict_proba(p_cal=prop_score_cal, y_cal=d_cal, p_test=prop_score_train, loss='Brier')[:, 1]
 
@@ -245,15 +235,12 @@ def alg_5_full_sample_calib(
             method='predict_proba')
         calibrated_prop_score = np.zeros_like(treatment, dtype=float)
 
-        # Stratified K-Fold for calibration
         kf_calib = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         for cal_idx, test_idx in kf_calib.split(covariates, treatment):
 
-            # Propensity scores for the calibration and test sets
             prop_scores_cal = propensity_scores[cal_idx]
             prop_scores_test = propensity_scores[test_idx]
 
-            # Venn-Abers calibration
             va = VennAbersCalibrator(precision=5)
             calibrated_prop_score[test_idx] = va.predict_proba(
                 p_cal=prop_scores_cal,
@@ -354,7 +341,7 @@ def calibration_errors(propensity_score, d, strategy = 'quantile',norm='l1',n_bi
     count = float(sample_weight.sum())
     for i, i_start in enumerate(threshold_indices[:-1]):
         i_end = threshold_indices[i + 1]
-        # ignore empty bins
+
         if i_end == i_start:
             continue
         delta_count[i] = float(sample_weight[i_start:i_end].sum())
