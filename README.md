@@ -6,29 +6,28 @@
 This repository contains replication code for the paper **"Calibration Strategies for Robust Causal Estimation: Theoretical and Empirical Insights on Propensity Score Based Estimators"**.
 ## File Structure
 
-### Evaluation Results
-- `evaluate_results_drug_plots.ipynb`: Analysis and visualization for drug dataset experiments
-- `evaluate_results_irm_plots.ipynb`: Interactive Regression Model (IRM) result visualization
-- `evaluate_results_nonlinear_plots.ipynb`: Nonlinear scenario analysis
-- `evaluate_results_unbalanced_plots.ipynb`: Unbalanced dataset evaluation
-- `results_table.ipynb`: Summary tables generation
-- `utils_eval.py`: Evaluation metrics and result processing
-
-
 ### Simulation Code
 **/run-simulation/py-files**
+- `utils_dgps.py`: Data Generating Process (DGP) configurations
+- `utils_calibration.py`: Propensity calibration methods
 - `sim_irm.py`: IRM DGP simulation
 - `sim_drug.py`: Drug DGP simulation
 - `sim_nonlinear.py`: Nonlinear DGP simulation
-- `sim_unbalance.py`: Unbalanced dataset simulation
-- `utils_dgps.py`: Data Generating Process (DGP) configurations
-- `utils_calibration.py`: Propensity calibration methods
+- `sim_unbalance.py`: Unbalanced DGP simulation
 
 **/run-simulation/sh-files**
 - `simulation_drug.sh`: Drug simulation bash script
 - `simulation_irm.sh`: IRM simulation bash script
 - `simulation_nonlinear.sh`: Nonlinear simulation bash script
 - `simulation_unbalanced.sh`: Unbalanced simulation bash script
+
+### Evaluation Results
+- `evaluate_results_drug_plots.ipynb`: Evaluation and visualization for drug DGP
+- `evaluate_results_irm_plots.ipynb`: Evaluation and visualization for IRM DGP
+- `evaluate_results_nonlinear_plots.ipynb`: Evaluation and visualization for nonlinear DGP
+- `evaluate_results_unbalanced_plots.ipynb`: Evaluation and visualization for unbalanced DGP
+- `results_table.ipynb`: Summary tables generation
+- `utils_eval.py`: Evaluation metrics and result processing
 
 ## Usage
 ! Note to replicators:
