@@ -39,7 +39,7 @@ This repository contains replication code for the paper **"Calibration Strategie
 - Jupyter Lab 3.0+
 - DoubleML 0.6+
 - scikit-learn 1.0+
-- LightGBM 3.3+
+- LightGBM 4.0+
 
 **Installation:**
 ```bash
