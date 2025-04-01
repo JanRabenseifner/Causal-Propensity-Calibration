@@ -12,26 +12,30 @@ This repository contains replication code for the paper **"Calibration Strategie
 - `evaluate_results_nonlinear_plots.ipynb`: Nonlinear scenario analysis
 - `evaluate_results_unbalanced_plots.ipynb`: Unbalanced dataset evaluation
 - `results_table.ipynb`: Summary tables generation
+- `utils_eval.py`: Evaluation metrics and result processing
+
 
 ### Simulation Code
 **/run-simulation/py-files**
-- `sim_irm.py`: IRM scenario simulations
-- `sim_drug.py`: Drug dataset experiments
-- `sim_nonlinear.py`: Nonlinear DGP simulations
-- `sim_unbalance.py`: Unbalanced dataset simulations
+- `sim_irm.py`: IRM DGP simulation
+- `sim_drug.py`: Drug DGP simulation
+- `sim_nonlinear.py`: Nonlinear DGP simulation
+- `sim_unbalance.py`: Unbalanced dataset simulation
 - `utils_dgps.py`: Data Generating Process (DGP) configurations
 - `utils_calibration.py`: Propensity calibration methods
 
 **/run-simulation/sh-files**
-- `simulation_drug.sh`: Drug dataset pipeline
-- `simulation_irm.sh`: IRM simulation execution
-- `simulation_nonlinear.sh`: Nonlinear scenario runner
-- `simulation_unbalanced.sh`: Unbalanced dataset pipeline
-
-### Utilities
-- `utils_eval.py`: Evaluation metrics and result processing
+- `simulation_drug.sh`: Drug simulation bash script
+- `simulation_irm.sh`: IRM simulation bash script
+- `simulation_nonlinear.sh`: Nonlinear simulation bash script
+- `simulation_unbalanced.sh`: Unbalanced simulation bash script
 
 ## Usage
+! Note to replicators:
+- Update job scheduler commands in bash scripts (SLURM/PBS/etc.) for your cluster
+- Repitions are executed in parallel with different seeds:
+    - Adjust --jobs parameter in parallel command to match your core limits
+    - Adjust n_rep in simulation files (modify for different repetition counts)
 
 ### Local Setup
 **Requirements:**
