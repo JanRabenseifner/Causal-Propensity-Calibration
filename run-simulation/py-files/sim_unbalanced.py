@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import os
-import datetime
 import time
 import warnings
 from mpi4py import MPI
