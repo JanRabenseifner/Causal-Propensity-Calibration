@@ -171,3 +171,4 @@ cython_debug/
 
 # Figures
 *.pdf
+properties_drug.ipynb
