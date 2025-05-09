@@ -8,7 +8,7 @@ from scipy.stats import beta
 import warnings
 warnings.filterwarnings('ignore')
 
-def make_high_dimensional_data(n_obs=500, dim_x=200, theta=0, R2_d=0.5, R2_y=0.5, return_type='DoubleMLData'):
+def make_irm_data(n_obs=500, dim_x=20, theta=0, R2_d=0.5, R2_y=0.5, return_type='DoubleMLData'):
 
     # inspired by https://onlinelibrary.wiley.com/doi/abs/10.3982/ECTA12723, see suplement
     v = np.random.uniform(size=[n_obs, ])
@@ -41,7 +41,7 @@ def make_high_dimensional_data(n_obs=500, dim_x=200, theta=0, R2_d=0.5, R2_y=0.5
     }
     return data_dict
     
-def make_overlap_data(n_obs=500, overlap=0.1, return_type='DoubleMLData'):
+def make_drug_data(n_obs=500, overlap=0.1, return_type='DoubleMLData'):
     # inspired by https://arxiv.org/abs/2306.00382, see Appendix B
 
     # Simulate the second confounder dependend on gender
@@ -113,7 +113,7 @@ def make_overlap_data(n_obs=500, overlap=0.1, return_type='DoubleMLData'):
 
     return data_dict    
 
-def make_prop_misspecification_data(n_obs=1000, return_type='DoubleMLData'):
+def make_nonlinear_data(n_obs=1000, return_type='DoubleMLData'):
     # Setting 1, from https://arxiv.org/abs/2302.14011 (Appendix D.1), low-dimensional + discrete y
     x = pd.DataFrame({
             'x1': np.random.uniform(-1, 1, n_obs),
@@ -181,14 +181,14 @@ def make_unbalanced_data(n_obs=500,dim_x=20,share_treated=0.05,simulation_type='
 
 
 def dgp_wrapper(dgp_type, **kwargs):
-    if dgp_type == 'sim_high_dimensional':
-        dgp_dict = make_high_dimensional_data(**kwargs)
-    elif dgp_type == 'sim_overlap':
-        dgp_dict = make_overlap_data(**kwargs)
-    elif dgp_type == 'sim_unbalanced':
+    if dgp_type == 'sim_v06_irm':
+        dgp_dict = make_irm_data(**kwargs)
+    elif dgp_type == 'sim_v06_drug':
+        dgp_dict = make_drug_data(**kwargs)
+    elif dgp_type == 'sim_v06_unbalanced':
         dgp_dict = make_unbalanced_data(**kwargs)   
-    elif dgp_type == 'sim_prop_misspecification':
-        dgp_dict = make_prop_misspecification_data(**kwargs)
+    elif dgp_type == 'sim_v06_nonlinear':
+        dgp_dict = make_nonlinear_data(**kwargs)
     else:
         raise ValueError(f'DGP type {dgp_type} not implemented.')
 
