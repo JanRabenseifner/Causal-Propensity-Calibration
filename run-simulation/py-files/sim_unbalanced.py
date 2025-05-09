@@ -1,12 +1,4 @@
 #!/usr/bin/env python
-
-from causalml.match import NearestNeighborMatch
-from causalml.inference.meta import BaseXLearner
-from causalml.inference.meta import BaseTLearner
-from causalml.inference.meta import BaseRLearner
-from causalml.inference.meta import TMLELearner
-import statsmodels.formula.api as smf
-
 import os
 import datetime
 import time
@@ -21,14 +13,12 @@ from sklearn.linear_model import (
 )
 from lightgbm import LGBMClassifier, LGBMRegressor
 import doubleml as dml
-import utils_ate
+import utils_calibration
 import utils_dgps
-from utils_ate import (
+from utils_calibration import (
     calibrate_propensity_score, 
-    compute_ipw_wls,
-    calibration_errors,
-    compute_ci_metrics,
-    create_results_dict
+    compute_ipw_estimate, 
+    calibration_errors
 )
 from utils_dgps import dgp_wrapper
 
@@ -57,7 +47,7 @@ warnings.filterwarnings('ignore')
 
 
 # DGP pars
-dgp_type = 'sim_unbalanced'
+dgp_type = 'sim_v06_unbalanced'
 theta = 1
 sigma=1 # 5
 sim_type = 'A'
@@ -69,13 +59,19 @@ clipping_thresholds = [1e-12, 0.01, 0.1]
 
 calib_methods = [
     ('alg-1-uncalibrated', 'uncalibrated'),
-    #('alg-3-cross-fitted-calib', 'isotonic'),
-    #('alg-3-cross-fitted-calib', 'platt'),
-    #('alg-3-cross-fitted-calib', 'ivap'),
+    ('alg-2-nested-cross-fitting-calib', 'isotonic'),
+    ('alg-2-nested-cross-fitting-calib', 'platt'),
+    ('alg-2-nested-cross-fitting-calib', 'ivap'),
+    ('alg-3-cross-fitted-calib', 'isotonic'),
+    ('alg-3-cross-fitted-calib', 'platt'),
+    ('alg-3-cross-fitted-calib', 'ivap'),
+    ('alg-4-single-split-calib', 'isotonic'),
+    ('alg-4-single-split-calib', 'platt'),
+    ('alg-4-single-split-calib', 'ivap'),
     ('alg-5-full-sample-calib', 'isotonic'),
     ('alg-5-full-sample-calib', 'platt'),
-    ('alg-5-full-sample-calib', 'ivap'),
-    #('oracle', 'uncalibrated'),
+    ('alg-5-full-sample-calib', 'ivap'),    
+    ('oracle', 'uncalibrated'),
 ]
 
 n_folds = 5
@@ -83,40 +79,36 @@ score = "ATE"
 
 learner_dict_g = {
     'Linear': LinearRegression(),
-    'RF': RandomForestRegressor(random_state=None),
-    'LGBM': LGBMRegressor(verbose=-1, random_state=None),
+    'RF': RandomForestRegressor(),
+    'LGBM': LGBMRegressor(verbose=-1)
     }
 
 learner_dict_m = {
     'Logit': LogisticRegression(),
-    'RF': RandomForestClassifier(random_state=None),
-    'LGBM': LGBMClassifier(verbose=-1, random_state=None),
+    'RF': RandomForestClassifier(),
+    'LGBM': LGBMClassifier(verbose=-1)    
     }
 
 
-def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0):
-
+def estimate_irm(data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0):
     n_calib_methods = len(calib_methods)
     n_clipping_thresholds = len(clipping_thresholds)
-
-    irm_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
-    irm_ses, irm_cover, irm_ci_length, K, rmses, ece_u, ece_q, ece_u_5, ece_q_5, mce, ece_l2, ipw_coefs, ipw_ses, ipw_ci_length,ipw_cover, plr_coefs, plr_ses,plr_ci_length,plr_cover = [
-        np.full_like(irm_coefs, np.nan) for _ in range(19)
-    ]
-
-    name_calib_method, name_method = [
-        np.full_like(irm_coefs, "not specified", dtype=object) for _ in range(2)
-    ]
-
-    match_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
-    match_ses,match_ci_length, match_cover, K_match, rmses_match, ece_u_match, ece_q_match, ece_u_5_match, ece_q_5_match, mce_match, ece_l2_match = [
-        np.full_like(match_coefs, np.nan) for _ in range(11)
-    ]
-
-    X_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
-    X_ci_length, X_cover, TMLE_coefs, TMLE_ci_length, TMLE_cover,  = [
-        np.full_like(X_coefs, np.nan) for _ in range(5)
-    ]
+    coefs = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)
+    ses = np.full_like(coefs, fill_value=np.nan)
+    cover = np.full_like(coefs, fill_value=np.nan)
+    ci_length = np.full_like(coefs, fill_value=np.nan)
+    K = np.full_like(coefs, fill_value=np.nan)
+    rmses = np.full_like(coefs, fill_value=np.nan)
+    name_calib_method = np.full_like(coefs, fill_value="not specified", dtype=object)
+    name_method = np.full_like(coefs, fill_value="not specified", dtype=object)
+    ece_u = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)
+    ece_q = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)
+    ece_u_5 = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)
+    ece_q_5 = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)    
+    mce = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)
+    ece_l2 = np.full(shape=(n_calib_methods, n_clipping_thresholds), fill_value=np.nan)
+    ipw_coefs = np.full_like(coefs, fill_value=np.nan)
+    plr_coefs = np.full_like(coefs, fill_value=np.nan)
 
     # set up the DoubleMLIRM models
     dml_irm = dml.DoubleMLIRM(data,
@@ -124,17 +116,17 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
                             ml_m=learner_m,
                             score=score,
                             n_folds=n_folds,
-                            trimming_threshold=1e-12) 
+                            trimming_threshold=1e-12)
     # fit standard model without calibration and save predictions
     dml_irm.fit(n_jobs_cv=5)
-    smpls = dml_irm.smpls[0]
+    smpls = dml_irm.smpls[0] 
     dml_irm_ext = dml.DoubleMLIRM(data,
                                 ml_g=dml.utils.DMLDummyRegressor(),
                                 ml_m=dml.utils.DMLDummyClassifier(),
                                 score=score,
                                 n_folds=n_folds,
                                 trimming_threshold=1e-12)
-    # set up the PLR model
+    # set up PLR model
     dml_plr = dml.DoubleMLPLR(data,
                               ml_l=learner_g,
                               ml_m=learner_m,
@@ -147,17 +139,15 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
                                   score="partialling out",
                                   n_folds=n_folds)
 
+    # name elements for readability
     prop_score = dml_irm.predictions["ml_m"][:, :, 0].squeeze()
     treatment = data.d
     outcome = data.y
     covariates = data.x
-
-    for i_clipping_threshold, clipping_threshold in enumerate(clipping_thresholds):                 
+    for i_clipping_threshold, clipping_threshold in enumerate(clipping_thresholds):
 
         # re-fit model with calibration
         for i_calib_method, (method, calib_method) in enumerate(calib_methods):
-            method = method
-            calib_method = calib_method
             calib_prop_score = calibrate_propensity_score(
                 method=method,
                 covariates=covariates,
@@ -169,91 +159,6 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
                 smpls=smpls,
                 true_propensity_score=m_0)
             
-            df_X = pd.DataFrame(covariates, columns=[f'x_{i}' for i in range(covariates.shape[1])]) 
-
-            df_pred = pd.DataFrame({
-            'd': treatment,
-            'y': outcome,
-            'prop_score': np.clip(calib_prop_score, 
-                                0.0 + clipping_threshold, 
-                                1.0 - clipping_threshold)
-            })
-            df_pred = pd.concat([df_pred, df_X], axis=1)
-            
-            # Nearest neighbor matching using causalml
-            psm = NearestNeighborMatch(
-                caliper=0.1,
-                replace=True,
-                ratio=1,
-                random_state=42,
-                n_jobs = -1
-            )
-            
-            # matching via external propensity scores
-            matched_data = psm.match(
-                data=df_pred,
-                treatment_col='d',
-                score_cols=['prop_score'],
-            )
-            
-            
-            # Estimate ATE with OLS
-            covariates_list = [str(col) for col in df_X.columns]
-            model_formula = f'y ~ d + {" + ".join(covariates_list)}'
-            model = smf.ols(model_formula, data=matched_data).fit()      
-            # Store results
-            match_coefs[i_calib_method,i_clipping_threshold] = model.params['d']
-            match_ses[i_calib_method,i_clipping_threshold] = model.bse['d']
-
-            confint = model.conf_int(alpha=0.05)
-
-            # Calculate the length and coverage of the confidence interval for 'd'
-            match_ci_length[i_calib_method,i_clipping_threshold] = confint.loc['d', 1] - confint.loc['d', 0]
-            match_cover[i_calib_method,i_clipping_threshold] = (confint.loc['d', 0] < theta) and (theta < confint.loc['d', 1])
-        
-            # Store propensity scores for calibration metrics
-            prop_score_match = matched_data['prop_score'].values
-            y_match = matched_data['y'].values
-            d_match = matched_data['d'].values
-            X_match = matched_data[df_X.columns].values
-
-            ece_u_match[i_calib_method,i_clipping_threshold] = calibration_errors(prop_score_match, d_match, 
-                                                                                        strategy = 'uniform',norm='l1',n_bins= float(10))
-            ece_q_match[i_calib_method,i_clipping_threshold] = calibration_errors(prop_score_match, d_match,
-                                                                                        strategy = 'quantile',norm='l1',n_bins= float(10))
-            ece_u_5_match[i_calib_method,i_clipping_threshold] = calibration_errors(prop_score_match, d_match, 
-                                                                                        strategy = 'uniform',norm='l1',n_bins= float(5))
-            ece_q_5_match[i_calib_method,i_clipping_threshold] = calibration_errors(prop_score_match, d_match,
-                                                                                        strategy = 'quantile',norm='l1',n_bins= float(5))            
-            ece_l2_match[i_calib_method,i_clipping_threshold] = calibration_errors(prop_score_match, d_match,
-                                                                            strategy = 'uniform',norm='l2',n_bins= float(10))
-            mce_match[i_calib_method,i_clipping_threshold] = calibration_errors(prop_score_match, d_match,
-                                                                                    strategy = 'uniform',norm='max',n_bins= float(10))
-            # store n-unique propensity scores
-            prop_values, inverse_map, counts = np.unique(prop_score_match, return_inverse=True, return_counts=True)
-            K_match[i_calib_method,i_clipping_threshold] = len(prop_values)
-            rmses_match[i_calib_method,i_clipping_threshold] = np.sqrt(((prop_score_match -  d_match) ** 2).mean())
-
-
-            # Add X Learner, TMLE Learner
-
-            #[X_coefs[i_calib_method,i_clipping_threshold], X_lower, X_upper] = BaseXLearner(learner=learner_g).estimate_ate(X=df_X, treatment=df_pred['d'], 
-            #                                                                                                y=df_pred['y'],p=df_pred['prop_score'],
-            #                                                                                                bootstrap_ci=True, n_bootstraps =100)
-            #X_ci_length[i_calib_method,i_clipping_threshold], X_cover[i_calib_method,i_clipping_threshold] = compute_ci_metrics(theta, X_lower, X_upper).values()
-
-            [TMLE_coefs[i_calib_method,i_clipping_threshold], TMLE_lower, TMLE_upper] = TMLELearner(learner=learner_g,calibrate_propensity=False).estimate_ate(X=df_X, treatment=df_pred['d'], 
-                                                                                                                    y=df_pred['y'],p=df_pred['prop_score'],
-                                                                                                                    return_ci =True)
-            TMLE_ci_length[i_calib_method,i_clipping_threshold], TMLE_cover[i_calib_method,i_clipping_threshold] = compute_ci_metrics(theta, TMLE_lower, TMLE_upper).values() 
-
-            #[T_coefs[i_calib_method,i_clipping_threshold], T_lower, T_upper] = BaseTLearner(learner=learner_g).estimate_ate(X=df_X, treatment=df_pred['d'],
-            #                                                                                                                y=df_pred['y'],p=df_pred['prop_score'],bootstrap_ci =True)
-            #T_ci_length[i_calib_method,i_clipping_threshold], T_cover[i_calib_method,i_clipping_threshold] = compute_ci_metrics(theta, T_lower, T_upper).values() 
-            #[R_coefs[i_calib_method,i_clipping_threshold], R_lower, R_upper] = BaseRLearner(learner=learner_g).estimate_ate(X=df_X, treatment=df_pred['d'],
-            #                                                                                                                y=df_pred['y'],p=df_pred['prop_score'],bootstrap_ci =True)  
-            #R_ci_length[i_calib_method,i_clipping_threshold], R_cover[i_calib_method,i_clipping_threshold] = compute_ci_metrics(theta, R_lower, R_upper).values() 
-
             # fit irm model with external predictions
             pred_dict_irm_calib = {"d": {
                 "ml_g0": dml_irm.predictions["ml_g0"][:, :, 0],
@@ -271,11 +176,11 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
             }
             dml_plr_ext.fit(external_predictions=pred_dict_plr_calib)
 
-            irm_coefs[i_calib_method, i_clipping_threshold] = dml_irm_ext.coef[0]
-            irm_ses[i_calib_method, i_clipping_threshold] = dml_irm_ext.se[0]
-            irm_confint_calib = dml_irm_ext.confint()
-            irm_cover[i_calib_method, i_clipping_threshold] = (irm_confint_calib.loc['d', '2.5 %'] < theta) & (theta < irm_confint_calib.loc['d', '97.5 %'])
-            irm_ci_length[i_calib_method, i_clipping_threshold]  = irm_confint_calib.loc['d', '97.5 %'] - irm_confint_calib.loc['d', '2.5 %']
+            coefs[i_calib_method, i_clipping_threshold] = dml_irm_ext.coef[0]
+            ses[i_calib_method, i_clipping_threshold] = dml_irm_ext.se[0]
+            confint_calib = dml_irm_ext.confint()
+            cover[i_calib_method, i_clipping_threshold] = (confint_calib.loc['d', '2.5 %'] < theta) & (theta < confint_calib.loc['d', '97.5 %'])
+            ci_length[i_calib_method, i_clipping_threshold]  = confint_calib.loc['d', '97.5 %'] - confint_calib.loc['d', '2.5 %']
             rmses[i_calib_method, i_clipping_threshold] = np.sqrt(((calib_prop_score - treatment) ** 2).mean())
             name_method[i_calib_method, i_clipping_threshold] = method
             name_calib_method[i_calib_method, i_clipping_threshold] = calib_method
@@ -294,109 +199,36 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
             # store n-unique propensity scores
             prop_values, inverse_map, counts = np.unique(calib_prop_score, return_inverse=True, return_counts=True)
             K[i_calib_method, i_clipping_threshold] = len(prop_values)
-            ipw = compute_ipw_wls(calib_prop_score, treatment, outcome,theta)
 
-            ipw_coefs[i_calib_method, i_clipping_threshold] = ipw['IPW_coefs']
-            ipw_ses[i_calib_method, i_clipping_threshold] = ipw['IPW_ses']
-            ipw_ci_length[i_calib_method, i_clipping_threshold] = ipw['IPW_ci_length']
-            ipw_cover[i_calib_method, i_clipping_threshold] = ipw['IPW_cover']
+            ipw_coefs[i_calib_method, i_clipping_threshold] = compute_ipw_estimate(calib_prop_score, treatment, outcome)
             plr_coefs[i_calib_method, i_clipping_threshold] = dml_plr_ext.coef[0]
-            plr_ses[i_calib_method, i_clipping_threshold] = dml_plr_ext.se[0]
-            plr_confint_calib = dml_plr_ext.confint()
-            plr_cover[i_calib_method, i_clipping_threshold] = (plr_confint_calib.loc['d', '2.5 %'] < theta) & (theta < plr_confint_calib.loc['d', '97.5 %'])
-            plr_ci_length[i_calib_method, i_clipping_threshold]  = plr_confint_calib.loc['d', '97.5 %'] - plr_confint_calib.loc['d', '2.5 %']
 
-    # Define common metrics structure
-    METRICS = [
-        "irm_coefs", "irm_ses", "irm_cover", "irm_ci_length",
-        "K", "rmses", "method", "calib_method",
-        "ipw_coefs", "ipw_ses", "ipw_cover", "ipw_ci_length",
-        "plr_coefs", "plr_ses", "plr_cover", "plr_ci_length",
-        "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce",
-        "match_coefs", "match_ses", "match_ci_length", "match_cover",
-        "X_coefs", "X_ci_length", "X_cover", 
-        "TMLE_coefs", "TMLE_ci_length", "TMLE_cover"
-    ]
-    
-    n_calib_methods = len(calib_methods)
-    n_clipping_thresholds = len(clipping_thresholds)
-    base_shape = (n_calib_methods, n_clipping_thresholds)
-    results_dict_calib = create_results_dict(
-        base_shape=(n_calib_methods, n_clipping_thresholds),
-        fill_data={
-            "irm_coefs": irm_coefs,
-            "irm_ses": irm_ses,
-            "irm_cover": irm_cover,
-            "irm_ci_length": irm_ci_length,
-            "K": K,
-            "rmses": rmses,
-            "method": name_method,
-            "calib_method": name_calib_method,
-            "ipw_coefs": ipw_coefs,
-            "ipw_ses": ipw_ses,
-            "ipw_cover": ipw_cover,
-            "ipw_ci_length": ipw_ci_length,
-            "plr_coefs": plr_coefs,
-            "plr_ses": plr_ses,
-            "plr_cover": plr_cover,
-            "plr_ci_length": plr_ci_length,
-            "ece_u": ece_u,
-            "ece_q": ece_q,
-            "ece_u_5": ece_u_5,
-            "ece_q_5": ece_q_5,        
-            "ece_l2": ece_l2,        
-            "mce": mce
-        },
-        metrics_dict=METRICS,
-    )
+    results_dict = {
+        "coefs": coefs,
+        "ses": ses,
+        "cover": cover,
+        "ci_length": ci_length,
+        "K": K,
+        "rmses": rmses,
+        "method": name_method,
+        "calib_method": name_calib_method,        
+        "ipw_coefs": ipw_coefs,
+        "plr_coefs": plr_coefs,
+        "ece_u": ece_u,
+        "ece_q": ece_q,
+        "ece_u_5": ece_u_5,
+        "ece_q_5": ece_q_5,        
+        "ece_l2": ece_l2,        
+        "mce": mce}
+    return results_dict
 
-    results_dict_match = create_results_dict(
-        base_shape=(n_calib_methods, n_clipping_thresholds),
-        fill_data={
-            "K": K_match,  
-            "rmses": rmses_match,
-            "method": name_method,
-            "calib_method": name_calib_method,
-            "ece_u": ece_u_match,
-            "ece_q": ece_q_match,
-            "ece_u_5": ece_u_5_match,
-            "ece_q_5": ece_q_5_match,
-            "ece_l2": ece_l2_match,
-            "mce": mce_match,
-            "match_coefs": match_coefs,
-            "match_ses": match_ses,
-            "match_ci_length": match_ci_length,
-            "match_cover": match_cover
-        },
-        metrics_dict=METRICS
-    )
+# ignore warnings (prop. score is often close to zero or one)
+warnings.filterwarnings('ignore')
 
-    results_dict_meta = create_results_dict(
-        base_shape=(n_calib_methods, n_clipping_thresholds),
-        fill_data={
-            "method": name_method,
-            "calib_method": name_calib_method,
-            "X_coefs": X_coefs,
-            "X_ci_length": X_ci_length,
-            "X_cover": X_cover,
-            "TMLE_coefs": TMLE_coefs,
-            "TMLE_ci_length": TMLE_ci_length,
-            "TMLE_cover": TMLE_cover
-        },
-        metrics_dict=METRICS
-    )
-
-    return results_dict_calib, results_dict_match, results_dict_meta
-
-
-df = pd.DataFrame(columns=[
-    "irm_coefs", "irm_ses", "irm_cover", "irm_ci_length", "K", "rmses", "method", "calib_method",
-    "ipw_coefs","ipw_ses", "ipw_cover", "ipw_ci_length", "plr_coefs","plr_ses", "plr_cover", "plr_ci_length",
-    "match_coefs","match_ses", "match_ci_length","match_cover", 
-    "X_coefs", "X_ci_length", "X_cover", "TMLE_coefs", "TMLE_ci_length", "TMLE_cover",
-    "learner_g", "learner_m", "n_obs", "dim_x", "share_treated", "clipping_threshold", "repetition",
-    "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce",
-])
+df = pd.DataFrame(columns=["coefs","ses", "cover", "ci_length", "K", "rmses", "method", "calib_method",
+                           "ipw_coefs", "plr_coefs", "learner_g", "learner_m",
+                           "n_obs", "dim_x", "clipping_threshold", "repetition", 
+                           'ece_u','ece_q','ece_u_5','ece_q_5','ece_l2','mce', 'share_treated'])
 
 for i_rep in range(start_rep, end_rep):
     np.random.seed(42 + i_rep)
@@ -421,6 +253,7 @@ for i_rep in range(start_rep, end_rep):
             df_data['y'] = data_dict['outcome']
             df_data['d'] = data_dict['treatment']
             dml_data = dml.DoubleMLData(df_data, y_col='y', d_cols='d')
+
             for i_learner_g, (name_learner_g, learner_g) in enumerate(learner_dict_g.items()):
                 for i_learner_m, (name_learner_m, learner_m) in enumerate(learner_dict_m.items()):
                     random_state_value = 42 + i_rep
@@ -428,45 +261,36 @@ for i_rep in range(start_rep, end_rep):
                         learner_m.random_state = random_state_value
                     if hasattr(learner_g, 'random_state'):
                         learner_g.random_state = random_state_value
-
-                    results_dict_calib, results_dict_match, results_dict_meta = estimate_ate(
-                        dml_data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0
-                    )
-
-                    result_columns = [
-                        "irm_coefs", "irm_ses", "irm_cover", "irm_ci_length", "K", "rmses",
-                        "method", "calib_method", "ipw_coefs", "ipw_ses", "ipw_cover", "ipw_ci_length",
-                        "plr_coefs", "plr_ses", "plr_cover", "plr_ci_length",
-                        "match_coefs", "match_ses", "match_ci_length", "match_cover",
-                        "X_coefs", "X_ci_length", "X_cover", "TMLE_coefs", "TMLE_ci_length", "TMLE_cover",
-                        "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce"
-                    ]
-
-                    common_metadata = {
-                        "learner_g": name_learner_g,
-                        "learner_m": name_learner_m,
-                        "n_obs": n_obs,
-                        "dim_x": dim_x,
-                        "share_treated": share_treated,
-                        "repetition": i_rep         
-                    }
-                    n_calib_methods = len(calib_methods)
-                    n_clipping_thresholds = len(clipping_thresholds)
-                    
-                    for i_clipping, clipping_threshold in enumerate(clipping_thresholds):
-                        for results in [results_dict_calib, results_dict_match, results_dict_meta]:
-                            # Process calibration results
-                            result_data = {
-                                col: results[col][:, i_clipping]  # 1D slice
-                                for col in result_columns
-                            }
-                            result_data.update({
-                                k: np.full(n_calib_methods, v) 
-                                for k, v in common_metadata.items()
-                            })
-                            result_data["clipping_threshold"] = clipping_threshold
-                            df = pd.concat([df, pd.DataFrame(result_data)], ignore_index=True)
-
+                    dml_results = estimate_irm(dml_data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0)
+                    for i_clipping_threshold, clipping_threshold in enumerate(clipping_thresholds):
+                        # store results
+                        df_small = pd.DataFrame({
+                            "coefs": dml_results["coefs"][:, i_clipping_threshold],
+                            "ses": dml_results["ses"][:, i_clipping_threshold],
+                            "cover": dml_results["cover"][:, i_clipping_threshold],
+                            "ci_length": dml_results["ci_length"][:, i_clipping_threshold],
+                            "K": dml_results["K"][:, i_clipping_threshold],
+                            "rmses": dml_results["rmses"][:, i_clipping_threshold],
+                            "method": dml_results["method"][:, i_clipping_threshold],
+                            "calib_method": dml_results["calib_method"][:, i_clipping_threshold],                                
+                            "ipw_coefs": dml_results["ipw_coefs"][:, i_clipping_threshold],
+                            "plr_coefs": dml_results["plr_coefs"][:, i_clipping_threshold],
+                            "ece_u": dml_results["ece_u"][:, i_clipping_threshold],
+                            "ece_q": dml_results["ece_q"][:, i_clipping_threshold],
+                            "ece_u_5": dml_results["ece_u_5"][:, i_clipping_threshold],
+                            "ece_q_5": dml_results["ece_q_5"][:, i_clipping_threshold],                                
+                            "ece_l2": dml_results["ece_l2"][:, i_clipping_threshold],
+                            "mce": dml_results["mce"][:, i_clipping_threshold],  
+                            "learner_g": name_learner_g,
+                            "learner_m": name_learner_m,
+                            "n_obs": n_obs,
+                            "dim_x": dim_x,
+                            "clipping_threshold": clipping_threshold,
+                            "repetition": i_rep,
+                            "share_treated": share_treated
+                        })
+                                
+                        df = pd.concat([df, df_small], ignore_index=True)
 
 output_file = f'04_results_unbalanced/ranks_{job_id}/output_rank_{rank:03d}.pkl'
 df.to_pickle(output_file)
