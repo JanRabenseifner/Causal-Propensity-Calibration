@@ -28,9 +28,9 @@ source /usw/*******/anaconda3/bin/activate prop_calib
 #export OMP_DISPLAY_ENV=verbose
 export MPLCONFIGDIR=/beegfs/u/*******/sim_propensity_calibration/matplotlib
 
-mkdir -p /beegfs/u/*******/sim_propensity_calibration/02_errors_drug
-mkdir -p /beegfs/u/*******/sim_propensity_calibration/02_output_drug
-mkdir -p /beegfs/u/*******/sim_propensity_calibration/02_results_drug/ranks_$SLURM_JOB_ID
+mkdir -p /beegfs/u/********/sim_propensity_calibration/02_errors_drug
+mkdir -p /beegfs/u/********/sim_propensity_calibration/02_output_drug
+mkdir -p /beegfs/u/********/sim_propensity_calibration/02_results_drug/ranks_$SLURM_JOB_ID
 
 #mkdir -p /beegfs/u/*******/sim_propensity_calibration/results/ranks
 
