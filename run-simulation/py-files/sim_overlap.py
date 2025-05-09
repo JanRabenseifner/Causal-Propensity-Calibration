@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 from causalml.match import NearestNeighborMatch
 from causalml.inference.meta import BaseXLearner
 from causalml.inference.meta import BaseTLearner
@@ -11,6 +10,7 @@ import os
 import datetime
 import time
 import warnings
+warnings.filterwarnings('ignore')
 from mpi4py import MPI
 import numpy as np
 import pandas as pd
@@ -31,7 +31,6 @@ from utils_ate import (
     create_results_dict
 )
 from utils_dgps import dgp_wrapper
-
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -55,16 +54,15 @@ end_rep = start_rep + reps_per_process
 start_time = time.time()
 warnings.filterwarnings('ignore')
 
-
 # DGP pars
-dgp_type = 'sim_unbalanced'
-theta = 1
-sigma=1 # 5
-sim_type = 'A'
+dgp_type = 'sim_overlap'
+n_obs_list = [500,1000,2000,3000,4000]
+dim_x = 3
+theta = -1
 
-n_obs_list = [2000,4000,6000,8000]
-share_treated_list = [0.05, 0.1, 0.2]
-dim_x = 20
+overlaps = [0.1, 0.5, 0.9]
+n_folds = 5
+score = "ATE"
 clipping_thresholds = [1e-12, 0.01, 0.1]
 
 calib_methods = [
@@ -83,36 +81,41 @@ score = "ATE"
 
 learner_dict_g = {
     'Linear': LinearRegression(),
-    'RF': RandomForestRegressor(random_state=None),
-    'LGBM': LGBMRegressor(verbose=-1, random_state=None),
+    'RF': RandomForestRegressor(),
+    'LGBM': LGBMRegressor(verbose=-1)
     }
 
 learner_dict_m = {
     'Logit': LogisticRegression(),
-    'RF': RandomForestClassifier(random_state=None),
-    'LGBM': LGBMClassifier(verbose=-1, random_state=None),
+    'RF': RandomForestClassifier(),
+    'LGBM': LGBMClassifier(verbose=-1)
     }
-
 
 def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0):
 
     n_calib_methods = len(calib_methods)
     n_clipping_thresholds = len(clipping_thresholds)
 
+    # Base array with shape (n_calib_methods, n_clipping_thresholds)
     irm_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
+
+    # Create multiple arrays of the same shape and fill value (np.nan)
     irm_ses, irm_cover, irm_ci_length, K, rmses, ece_u, ece_q, ece_u_5, ece_q_5, mce, ece_l2, ipw_coefs, ipw_ses, ipw_ci_length,ipw_cover, plr_coefs, plr_ses,plr_ci_length,plr_cover = [
         np.full_like(irm_coefs, np.nan) for _ in range(19)
     ]
 
+    # Arrays with the string "not specified" and object dtype
     name_calib_method, name_method = [
         np.full_like(irm_coefs, "not specified", dtype=object) for _ in range(2)
     ]
 
+    # Create arrays for match_* variables with shape (n_clipping_thresholds,)
     match_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
     match_ses,match_ci_length, match_cover, K_match, rmses_match, ece_u_match, ece_q_match, ece_u_5_match, ece_q_5_match, mce_match, ece_l2_match = [
         np.full_like(match_coefs, np.nan) for _ in range(11)
     ]
 
+    # Create arrays for meta learners variables with shape (n_clipping_thresholds,)
     X_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
     X_ci_length, X_cover, TMLE_coefs, TMLE_ci_length, TMLE_cover,  = [
         np.full_like(X_coefs, np.nan) for _ in range(5)
@@ -180,7 +183,7 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
             })
             df_pred = pd.concat([df_pred, df_X], axis=1)
             
-            # Nearest neighbor matching using causalml
+            # Perform nearest neighbor matching using causalml
             psm = NearestNeighborMatch(
                 caliper=0.1,
                 replace=True,
@@ -189,16 +192,15 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
                 n_jobs = -1
             )
             
-            # matching via external propensity scores
+            # Perform matching using external propensity scores
             matched_data = psm.match(
                 data=df_pred,
                 treatment_col='d',
                 score_cols=['prop_score'],
             )
             
-            
             # Estimate ATE with OLS
-            covariates_list = [str(col) for col in df_X.columns]
+            covariates_list = [str(col) for col in df_X.columns]  # Assuming df_X is your covariate DataFrame
             model_formula = f'y ~ d + {" + ".join(covariates_list)}'
             model = smf.ols(model_formula, data=matched_data).fit()      
             # Store results
@@ -207,8 +209,10 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
 
             confint = model.conf_int(alpha=0.05)
 
-            # Calculate the length and coverage of the confidence interval for 'd'
+            # Calculate the length of the confidence interval for 'd'
             match_ci_length[i_calib_method,i_clipping_threshold] = confint.loc['d', 1] - confint.loc['d', 0]
+
+            # Check coverage: See if the true treatment effect theta is within the confidence interval for 'd'
             match_cover[i_calib_method,i_clipping_threshold] = (confint.loc['d', 0] < theta) and (theta < confint.loc['d', 1])
         
             # Store propensity scores for calibration metrics
@@ -394,29 +398,27 @@ df = pd.DataFrame(columns=[
     "ipw_coefs","ipw_ses", "ipw_cover", "ipw_ci_length", "plr_coefs","plr_ses", "plr_cover", "plr_ci_length",
     "match_coefs","match_ses", "match_ci_length","match_cover", 
     "X_coefs", "X_ci_length", "X_cover", "TMLE_coefs", "TMLE_ci_length", "TMLE_cover",
-    "learner_g", "learner_m", "n_obs", "dim_x", "share_treated", "clipping_threshold", "repetition",
+    "learner_g", "learner_m", "n_obs", "dim_x", "overlap", "clipping_threshold", "repetition",
     "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce",
 ])
 
 for i_rep in range(start_rep, end_rep):
     np.random.seed(42 + i_rep)
-    for i_n_obs, n_obs in enumerate(n_obs_list):
-        for (i_share_treated, share_treated) in enumerate(share_treated_list):
+    for (i_overlap, overlap) in enumerate(overlaps):
+        for (i_n_obs, n_obs) in enumerate(n_obs_list):
+            print(f'Rank {rank} handling repetition: {i_rep + 1} / {n_rep}\tn_obs: {n_obs}\toverlap: {overlap}')
             n_obs = int(n_obs)
-            i_rep = int(i_rep)
-            print(f'Rank {rank} handling repetition: {i_rep + 1} / {n_rep}\tn_obs: {n_obs}')
+            i_rep = int(i_rep)            
+            # generate data
             dgp_dict = {
-                        'n_obs': n_obs,
-                        'dim_x': dim_x,
-                        'simulation_type': sim_type,
-                        'share_treated':share_treated,
-                        'sigma': sigma
-                        }
+                'overlap': overlap,
+                'n_obs': n_obs,
+            }
             data_dict = dgp_wrapper(dgp_type=dgp_type, **dgp_dict)
-
+            # true treatment     
+            theta = data_dict['treatment_effect']
             # true propensity score      
             m_0 = data_dict['propensity_score']
-            # create DoubleMLData object 
             df_data = pd.DataFrame(data_dict['covariates'], columns=[f'x{i+1}' for i in range(dim_x)])
             df_data['y'] = data_dict['outcome']
             df_data['d'] = data_dict['treatment']
@@ -447,7 +449,7 @@ for i_rep in range(start_rep, end_rep):
                         "learner_m": name_learner_m,
                         "n_obs": n_obs,
                         "dim_x": dim_x,
-                        "share_treated": share_treated,
+                        "overlap": overlap,
                         "repetition": i_rep         
                     }
                     n_calib_methods = len(calib_methods)
@@ -468,7 +470,7 @@ for i_rep in range(start_rep, end_rep):
                             df = pd.concat([df, pd.DataFrame(result_data)], ignore_index=True)
 
 
-output_file = f'04_results_unbalanced/ranks_{job_id}/output_rank_{rank:03d}.pkl'
+output_file = f'02_results_overlap/ranks_{job_id}/output_rank_{rank:03d}.pkl'
 df.to_pickle(output_file)
 
 end_time = time.time()

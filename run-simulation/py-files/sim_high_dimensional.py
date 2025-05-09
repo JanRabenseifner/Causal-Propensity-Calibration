@@ -32,7 +32,6 @@ from utils_ate import (
 )
 from utils_dgps import dgp_wrapper
 
-
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
@@ -55,16 +54,13 @@ end_rep = start_rep + reps_per_process
 start_time = time.time()
 warnings.filterwarnings('ignore')
 
-
 # DGP pars
-dgp_type = 'sim_unbalanced'
-theta = 1
-sigma=1 # 5
-sim_type = 'A'
+dgp_type = 'sim_high_dimensional'  
+theta = 0.0
 
-n_obs_list = [2000,4000,6000,8000]
-share_treated_list = [0.05, 0.1, 0.2]
-dim_x = 20
+n_obs_list = [500,1000,2000,3000,4000] 
+dim_x_list = [5,20,50,100,200] 
+R2_d_list = [0.2, 0.5, 0.8]
 clipping_thresholds = [1e-12, 0.01, 0.1]
 
 calib_methods = [
@@ -99,6 +95,7 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
     n_calib_methods = len(calib_methods)
     n_clipping_thresholds = len(clipping_thresholds)
 
+    # Base array with shape (n_calib_methods, n_clipping_thresholds)
     irm_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
     irm_ses, irm_cover, irm_ci_length, K, rmses, ece_u, ece_q, ece_u_5, ece_q_5, mce, ece_l2, ipw_coefs, ipw_ses, ipw_ci_length,ipw_cover, plr_coefs, plr_ses,plr_ci_length,plr_cover = [
         np.full_like(irm_coefs, np.nan) for _ in range(19)
@@ -107,7 +104,6 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
     name_calib_method, name_method = [
         np.full_like(irm_coefs, "not specified", dtype=object) for _ in range(2)
     ]
-
     match_coefs = np.full((n_calib_methods, n_clipping_thresholds), np.nan)
     match_ses,match_ci_length, match_cover, K_match, rmses_match, ece_u_match, ece_q_match, ece_u_5_match, ece_q_5_match, mce_match, ece_l2_match = [
         np.full_like(match_coefs, np.nan) for _ in range(11)
@@ -233,7 +229,6 @@ def estimate_ate(data, theta, learner_g, learner_m, n_folds, score, clipping_thr
             prop_values, inverse_map, counts = np.unique(prop_score_match, return_inverse=True, return_counts=True)
             K_match[i_calib_method,i_clipping_threshold] = len(prop_values)
             rmses_match[i_calib_method,i_clipping_threshold] = np.sqrt(((prop_score_match -  d_match) ** 2).mean())
-
 
             # Add X Learner, TMLE Learner
 
@@ -394,81 +389,74 @@ df = pd.DataFrame(columns=[
     "ipw_coefs","ipw_ses", "ipw_cover", "ipw_ci_length", "plr_coefs","plr_ses", "plr_cover", "plr_ci_length",
     "match_coefs","match_ses", "match_ci_length","match_cover", 
     "X_coefs", "X_ci_length", "X_cover", "TMLE_coefs", "TMLE_ci_length", "TMLE_cover",
-    "learner_g", "learner_m", "n_obs", "dim_x", "share_treated", "clipping_threshold", "repetition",
+    "learner_g", "learner_m", "n_obs", "dim_x", "R2_d", "clipping_threshold", "repetition",
     "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce",
 ])
 
 for i_rep in range(start_rep, end_rep):
     np.random.seed(42 + i_rep)
     for i_n_obs, n_obs in enumerate(n_obs_list):
-        for (i_share_treated, share_treated) in enumerate(share_treated_list):
-            n_obs = int(n_obs)
-            i_rep = int(i_rep)
-            print(f'Rank {rank} handling repetition: {i_rep + 1} / {n_rep}\tn_obs: {n_obs}')
-            dgp_dict = {
-                        'n_obs': n_obs,
-                        'dim_x': dim_x,
-                        'simulation_type': sim_type,
-                        'share_treated':share_treated,
-                        'sigma': sigma
+        for i_dim_x, dim_x in enumerate(dim_x_list):
+            for i_R2_d, R2_d in enumerate(R2_d_list):
+                n_obs = int(n_obs)
+                i_rep = int(i_rep)
+                dim_x = int(dim_x)
+                dgp_dict = {'theta': theta, 'n_obs': n_obs, 'dim_x': dim_x, 'R2_d': R2_d}
+                data_dict = dgp_wrapper(dgp_type=dgp_type, **dgp_dict)
+                m_0 = data_dict['propensity_score']
+                df_data = pd.DataFrame(data_dict['covariates'], columns=[f'x{i+1}' for i in range(dim_x)])
+                df_data['y'] = data_dict['outcome']
+                df_data['d'] = data_dict['treatment']
+                dml_data = dml.DoubleMLData(df_data, y_col='y', d_cols='d')
+                for i_learner_g, (name_learner_g, learner_g) in enumerate(learner_dict_g.items()):
+                    print(f'Rank handling repetition: {i_rep + 1} / {n_rep}\tn_obs: {n_obs}\tdim_x: {dim_x}\tR2_d: {R2_d}', 
+                          f'learner_g: {name_learner_g}')
+                    for i_learner_m, (name_learner_m, learner_m) in enumerate(learner_dict_m.items()):
+                        random_state_value = 42 + i_rep
+                        if hasattr(learner_m, 'random_state'):
+                            learner_m.random_state = random_state_value
+                        if hasattr(learner_g, 'random_state'):
+                            learner_g.random_state = random_state_value
+
+                        results_dict_calib, results_dict_match, results_dict_meta = estimate_ate(
+                            dml_data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0
+                        )
+
+                        result_columns = [
+                            "irm_coefs", "irm_ses", "irm_cover", "irm_ci_length", "K", "rmses",
+                            "method", "calib_method", "ipw_coefs", "ipw_ses", "ipw_cover", "ipw_ci_length",
+                            "plr_coefs", "plr_ses", "plr_cover", "plr_ci_length",
+                            "match_coefs", "match_ses", "match_ci_length", "match_cover",
+                            "X_coefs", "X_ci_length", "X_cover", "TMLE_coefs", "TMLE_ci_length", "TMLE_cover",
+                            "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce"
+                        ]
+
+                        common_metadata = {
+                            "learner_g": name_learner_g,
+                            "learner_m": name_learner_m,
+                            "n_obs": n_obs,
+                            "dim_x": dim_x,
+                            "R2_d": R2_d,
+                            "repetition": i_rep         
                         }
-            data_dict = dgp_wrapper(dgp_type=dgp_type, **dgp_dict)
+                        n_calib_methods = len(calib_methods)
+                        n_clipping_thresholds = len(clipping_thresholds)
+                        
+                        for i_clipping, clipping_threshold in enumerate(clipping_thresholds):
+                            for results in [results_dict_calib, results_dict_match, results_dict_meta]:
+                                # Process calibration results
+                                result_data = {
+                                    col: results[col][:, i_clipping]  # 1D slice
+                                    for col in result_columns
+                                }
+                                result_data.update({
+                                    k: np.full(n_calib_methods, v) 
+                                    for k, v in common_metadata.items()
+                                })
+                                result_data["clipping_threshold"] = clipping_threshold
+                                df = pd.concat([df, pd.DataFrame(result_data)], ignore_index=True)
 
-            # true propensity score      
-            m_0 = data_dict['propensity_score']
-            # create DoubleMLData object 
-            df_data = pd.DataFrame(data_dict['covariates'], columns=[f'x{i+1}' for i in range(dim_x)])
-            df_data['y'] = data_dict['outcome']
-            df_data['d'] = data_dict['treatment']
-            dml_data = dml.DoubleMLData(df_data, y_col='y', d_cols='d')
-            for i_learner_g, (name_learner_g, learner_g) in enumerate(learner_dict_g.items()):
-                for i_learner_m, (name_learner_m, learner_m) in enumerate(learner_dict_m.items()):
-                    random_state_value = 42 + i_rep
-                    if hasattr(learner_m, 'random_state'):
-                        learner_m.random_state = random_state_value
-                    if hasattr(learner_g, 'random_state'):
-                        learner_g.random_state = random_state_value
-
-                    results_dict_calib, results_dict_match, results_dict_meta = estimate_ate(
-                        dml_data, theta, learner_g, learner_m, n_folds, score, clipping_thresholds, calib_methods, m_0
-                    )
-
-                    result_columns = [
-                        "irm_coefs", "irm_ses", "irm_cover", "irm_ci_length", "K", "rmses",
-                        "method", "calib_method", "ipw_coefs", "ipw_ses", "ipw_cover", "ipw_ci_length",
-                        "plr_coefs", "plr_ses", "plr_cover", "plr_ci_length",
-                        "match_coefs", "match_ses", "match_ci_length", "match_cover",
-                        "X_coefs", "X_ci_length", "X_cover", "TMLE_coefs", "TMLE_ci_length", "TMLE_cover",
-                        "ece_u", "ece_q", "ece_u_5", "ece_q_5", "ece_l2", "mce"
-                    ]
-
-                    common_metadata = {
-                        "learner_g": name_learner_g,
-                        "learner_m": name_learner_m,
-                        "n_obs": n_obs,
-                        "dim_x": dim_x,
-                        "share_treated": share_treated,
-                        "repetition": i_rep         
-                    }
-                    n_calib_methods = len(calib_methods)
-                    n_clipping_thresholds = len(clipping_thresholds)
-                    
-                    for i_clipping, clipping_threshold in enumerate(clipping_thresholds):
-                        for results in [results_dict_calib, results_dict_match, results_dict_meta]:
-                            # Process calibration results
-                            result_data = {
-                                col: results[col][:, i_clipping]  # 1D slice
-                                for col in result_columns
-                            }
-                            result_data.update({
-                                k: np.full(n_calib_methods, v) 
-                                for k, v in common_metadata.items()
-                            })
-                            result_data["clipping_threshold"] = clipping_threshold
-                            df = pd.concat([df, pd.DataFrame(result_data)], ignore_index=True)
-
-
-output_file = f'04_results_unbalanced/ranks_{job_id}/output_rank_{rank:03d}.pkl'
+output_file = f'01_results_irm/ranks_{job_id}/output_rank_{rank:03d}.pkl'
 df.to_pickle(output_file)
 
 end_time = time.time()
